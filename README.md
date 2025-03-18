@@ -12,7 +12,7 @@ A Lambda processor for AWS Firehose that reads a Cloudwatch metric steam in OTEL
 ### Filtering
 Since Cloudwatch treats every unique set of dimensions as a metric, a lot of metrics with irrelevant dimension sets will be exported in the metric stream. To reduce the number of timeseries pushed into Prometheus, the environment variable DIMENSION_FILTER can be used.  
 
-For example, EC2 metrics will be exported for the dimension ImageId (AMI), with no reference in the dimension of InstanceId. Timeseries summed up by these kind of dimensions are rarely used and the number of timeseries grows exponentially when number of dimensions increase.  
+For example, EC2 metrics will be exported with a single dimension of "ImageId" (AMI). Timeseries summed up by these kind of dimensions are rarely used and the number of timeseries grows exponentially with the number of dimensions. 
 By filtering on the dimensions that should procude timeseries one can reduce them to the useful ones. For EC2 metrics, a filter of "^InstanceId$" could be a good choice.
 
 ### Processing
