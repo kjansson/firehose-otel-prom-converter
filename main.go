@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -16,22 +15,19 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	v4 "github.com/aws/aws-sdk-go/aws/signer/v4"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	remote "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheusremotewrite"
 	"github.com/prometheus/prometheus/prompb"
-
-	//"github.com/prometheus/prometheus/prompb"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 )
 
 var errInvalidOTLPFormatStart = errors.New("unable to decode data length from message")
 
+// Partially based on https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/translator/prometheusremotewrite
 func unmarshalMetrics(record []byte) (pmetric.Metrics, error) {
 	md := pmetric.NewMetrics()
 	dataLen, pos := len(record), 0
@@ -51,7 +47,7 @@ func unmarshalMetrics(record []byte) (pmetric.Metrics, error) {
 			rm := req.Metrics().ResourceMetrics().At(i)
 			for j := 0; j < rm.ScopeMetrics().Len(); j++ {
 				sm := rm.ScopeMetrics().At(j)
-				sm.Scope().SetName("github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsfirehosereceiver")
+				sm.Scope().SetName("github.com/kjansson/firehose-otel-prom-converter")
 				sm.Scope().SetVersion("latest")
 			}
 		}
@@ -61,6 +57,7 @@ func unmarshalMetrics(record []byte) (pmetric.Metrics, error) {
 	return md, nil
 }
 
+// Partially based on https://github.com/aws-observability/observability-best-practices/tree/main/sandbox/CWMetricStreamExporter/lambda
 func sendRequest(ts []prompb.TimeSeries) (*http.Response, error) {
 
 	r := &prompb.WriteRequest{
@@ -74,7 +71,6 @@ func sendRequest(ts []prompb.TimeSeries) (*http.Response, error) {
 	encoded := snappy.Encode(nil, tsProto)
 	body := bytes.NewReader(encoded)
 
-	// Create an HTTP request from the body content and set necessary parameters.
 	req, err := http.NewRequest("POST", os.Getenv("PROMETHEUS_REMOTE_WRITE_URL"), body)
 	if err != nil {
 		panic(err)
@@ -83,31 +79,13 @@ func sendRequest(ts []prompb.TimeSeries) (*http.Response, error) {
 	sess, _ := session.NewSession(&aws.Config{
 		Region: aws.String(os.Getenv("AWS_REGION")),
 	})
-
-	roleArn := os.Getenv("AWS_AMP_ROLE_ARN")
-
-	host, err := os.Hostname()
-	if err != nil {
-		panic(err)
-	}
-
-	var awsCredentials *credentials.Credentials
-	if roleArn != "" {
-		awsCredentials = stscreds.NewCredentials(sess, roleArn, func(p *stscreds.AssumeRoleProvider) {
-			p.RoleSessionName = "aws-sigv4-proxy-" + host
-		})
-	} else {
-		awsCredentials = sess.Config.Credentials
-	}
-
-	signer := v4.NewSigner(awsCredentials)
+	awsCredentials := sess.Config.Credentials
 
 	req.Header.Set("Content-Type", "application/x-protobuf")
 	req.Header.Set("Content-Encoding", "snappy")
 	req.Header.Set("X-Prometheus-Remote-Write-Version", "0.1.0")
 
-	_, err = signer.Sign(req, body, "aps", os.Getenv("PROMETHEUS_REGION"), time.Now())
-
+	_, err = v4.NewSigner(awsCredentials).Sign(req, body, "aps", os.Getenv("PROMETHEUS_REGION"), time.Now())
 	if err != nil {
 		panic(err)
 	}
@@ -115,9 +93,8 @@ func sendRequest(ts []prompb.TimeSeries) (*http.Response, error) {
 	resp, err := http.DefaultClient.Do(req)
 
 	if resp.StatusCode != http.StatusOK {
-		log.Println("Request to AMP failed with status: ", resp.StatusCode)
+		panic("Request to AMP failed")
 	}
-
 	if err != nil {
 		panic(err)
 	}
@@ -132,7 +109,6 @@ func HandleRequest(ctx context.Context, firehoseEvent events.KinesisFirehoseEven
 
 	dimensionFilterEnv := os.Getenv("DIMENSION_FILTER")
 	useDimensionFilter := dimensionFilterEnv != ""
-
 	dimensionFilterExpression := regexp.MustCompile(dimensionFilterEnv)
 
 	var response events.KinesisFirehoseResponse
@@ -143,18 +119,13 @@ func HandleRequest(ctx context.Context, firehoseEvent events.KinesisFirehoseEven
 			panic(err)
 		}
 
-		promTs, err := remote.FromMetrics(metrics, remote.Settings{
-			SendMetadata:        false,
-			DisableTargetInfo:   false,
-			ExportCreatedMetric: false,
-			AddMetricSuffixes:   false,
-		})
+		// Convert OTEL to Prometheus
+		promTs, err := remote.FromMetrics(metrics, remote.Settings{})
 		if err != nil {
 			panic(err)
 		}
 
 		tsArray := []prompb.TimeSeries{}
-
 		for _, ts := range promTs {
 
 			labels := ts.GetLabels()
@@ -171,32 +142,32 @@ func HandleRequest(ctx context.Context, firehoseEvent events.KinesisFirehoseEven
 			valid := false
 			for k, v := range dimensions { // Create new labels from dimensions
 				newLables = append(newLables, prompb.Label{Name: k, Value: v})
-				if useDimensionFilter && dimensionFilterExpression.MatchString(k) {
+				if useDimensionFilter {
+					if dimensionFilterExpression.MatchString(k) { // Check if the dimension key matches the filter
+						valid = true
+						continue
+					}
+				} else {
 					valid = true
-					continue
 				}
 			}
 			if !valid {
-				continue
+				continue // Skip if no match
 			}
 
 			ts.Labels = newLables // Replace labels
 			tsArray = append(tsArray, *ts)
-
-			fmt.Println(ts.String())
-
 		}
 
-		// _, err = sendRequest(tsArray)
-		// if err != nil {
-		// 	panic(err)
-		// }
+		_, err = sendRequest(tsArray)
+		if err != nil {
+			panic(err)
+		}
 
-		var transformedRecord events.KinesisFirehoseResponseRecord
+		var transformedRecord events.KinesisFirehoseResponseRecord // Create an OK response for Firehose
 		transformedRecord.RecordID = record.RecordID
 		transformedRecord.Result = events.KinesisFirehoseTransformedStateOk
 		transformedRecord.Data = record.Data
-
 		response.Records = append(response.Records, transformedRecord)
 	}
 	return response, nil

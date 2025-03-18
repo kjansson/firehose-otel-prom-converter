@@ -10,9 +10,8 @@ A Lambda processor for AWS Firehose that reads a Cloudwatch metric steam in OTEL
 
 ## Configuration
 
-The lambda takes three environment variables as configuration;
+The lambda takes the following environment variables as configuration;
 
-- AWS_AMP_ROLE_ARN: the ARN of the role to assume for AMP write access
 - PROMETHEUS_REMOTE_WRITE_URL: The URL to the remote write endpoint of your AMP workspace
 - DIMENSION_FILTER - (optional) A regular expression of Cloudwatch dimensions to include metrics for, more information in the dimensions section below
 
