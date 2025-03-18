@@ -4,16 +4,8 @@ A Lambda processor for AWS Firehose that reads a Cloudwatch metric steam in OTEL
 
 ## Usage
 
-- Create a Amazon Managed Grafana workspace
-- Create a Cloudwatch metric stream to AWS Firehose
-- Deploy Lambda and configure as a processor in Firehose stream
-
-## Configuration
-
-The lambda takes the following environment variables as configuration;
-
-- PROMETHEUS_REMOTE_WRITE_URL: The URL to the remote write endpoint of your AMP workspace
-- DIMENSION_FILTER - (optional) A regular expression of Cloudwatch dimensions to include metrics for, more information in the dimensions section below
+- Build image and push to ECR
+- Deploy Terraform
 
 ## Dimensions
 
